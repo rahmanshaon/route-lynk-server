@@ -181,6 +181,34 @@ async function run() {
       res.send(result);
     });
 
+    // Get Bookings by User Email (For My Bookings)
+    app.get("/bookings/user/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { userEmail: email };
+      const result = await bookingsCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    // Get Bookings by Vendor Email (For Vendor Requests)
+    app.get("/bookings/vendor/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { vendorEmail: email };
+      const result = await bookingsCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    // Update Booking Status (Accept/Reject)
+    app.patch("/bookings/status/:id", async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: { status: status },
+      };
+      const result = await bookingsCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
