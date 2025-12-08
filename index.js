@@ -27,6 +27,38 @@ async function run() {
   try {
     await client.connect();
 
+    const db = client.db("routeLynkDB");
+    const usersCollection = db.collection("users");
+
+    console.log("Connected to MongoDB successfully!");
+
+    // --- User Related APIs ---
+
+    // Save User to DB
+    app.put("/users/:email", async (req, res) => {
+      const email = req.params.email;
+      const user = req.body;
+      const query = { email: email };
+
+      const options = { upsert: true };
+
+      const updateDoc = {
+        $set: {
+          name: user.name,
+          image: user.image,
+          email: user.email,
+          lastLogin: new Date(),
+        },
+        $setOnInsert: {
+          role: "user",
+          timestamp: new Date(),
+        },
+      };
+
+      const result = await usersCollection.updateOne(query, updateDoc, options);
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
