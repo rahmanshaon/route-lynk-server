@@ -262,6 +262,42 @@ async function run() {
       res.send({ insertResult, bookingResult, ticketResult });
     });
 
+    // Get Payments by User (Transaction History)
+    app.get("/payments/user/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { userEmail: email };
+      const result = await paymentsCollection
+        .find(query)
+        .sort({ date: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    // Vendor Stats (Revenue Overview)
+    app.get("/vendor-stats/:email", async (req, res) => {
+      const email = req.params.email;
+
+      // Total Revenue
+      const payments = await paymentsCollection
+        .find({ vendorEmail: email })
+        .toArray();
+      const totalRevenue = payments.reduce((sum, item) => sum + item.price, 0);
+      const totalSold = payments.reduce((sum, item) => sum + item.quantity, 0);
+
+      // Total Tickets Added
+      const totalAdded = await ticketsCollection.countDocuments({
+        "vendor.email": email,
+      });
+
+      // Pending Requests
+      const pendingRequests = await bookingsCollection.countDocuments({
+        vendorEmail: email,
+        status: "pending",
+      });
+
+      res.send({ totalRevenue, totalSold, totalAdded, pendingRequests });
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
