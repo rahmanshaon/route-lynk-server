@@ -29,6 +29,7 @@ async function run() {
 
     const db = client.db("routeLynkDB");
     const usersCollection = db.collection("users");
+    const ticketsCollection = db.collection("tickets");
 
     console.log("Connected to MongoDB successfully!");
 
@@ -64,6 +65,21 @@ async function run() {
       const email = req.params.email;
       const query = { email: email };
       const result = await usersCollection.findOne(query);
+      res.send(result);
+    });
+
+    // --- TICKET Related APIs ---
+
+    // Create a Ticket (POST)
+    app.post("/tickets", async (req, res) => {
+      const ticket = req.body;
+
+      // Default status for new tickets
+      ticket.status = "pending";
+      ticket.isAdvertised = false;
+      ticket.createdAt = new Date();
+
+      const result = await ticketsCollection.insertOne(ticket);
       res.send(result);
     });
 
