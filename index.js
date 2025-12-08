@@ -99,6 +99,24 @@ async function run() {
       res.send(result);
     });
 
+     // Get ALL Tickets (For Admin)
+    app.get("/tickets/admin", async (req, res) => {
+      const result = await ticketsCollection.find().toArray();
+      res.send(result);
+    });
+
+    // Update Ticket Status (Approve/Reject)
+    app.patch("/tickets/status/:id", async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: { status: status }
+      };
+      const result = await ticketsCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
