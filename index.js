@@ -30,6 +30,7 @@ async function run() {
     const db = client.db("routeLynkDB");
     const usersCollection = db.collection("users");
     const ticketsCollection = db.collection("tickets");
+    const bookingsCollection = db.collection("bookings");
 
     console.log("Connected to MongoDB successfully!");
 
@@ -157,6 +158,27 @@ async function run() {
         currentPage: page,
         totalPages: Math.ceil(total / limit),
       });
+    });
+
+    // 7. Get Single Ticket by ID
+    app.get("/tickets/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await ticketsCollection.findOne(query);
+      res.send(result);
+    });
+
+    // --- BOOKING APIs ---
+
+    // Create a Booking (POST)
+    app.post("/bookings", async (req, res) => {
+      const booking = req.body;
+
+      booking.status = "pending";
+      booking.bookedAt = new Date();
+
+      const result = await bookingsCollection.insertOne(booking);
+      res.send(result);
     });
 
     // Send a ping to confirm a successful connection
