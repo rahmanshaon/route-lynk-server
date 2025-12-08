@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 // Initialize the Express app
 const app = express();
@@ -31,6 +32,7 @@ async function run() {
     const usersCollection = db.collection("users");
     const ticketsCollection = db.collection("tickets");
     const bookingsCollection = db.collection("bookings");
+    const paymentsCollection = db.collection("payments");
 
     console.log("Connected to MongoDB successfully!");
 
@@ -207,6 +209,57 @@ async function run() {
       };
       const result = await bookingsCollection.updateOne(query, updateDoc);
       res.send(result);
+    });
+
+    // --- PAYMENT APIs ---
+
+    // Create Payment Intent
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "bdt",
+        payment_method_types: ["card"],
+      });
+
+      res.send({
+        clientSecret: paymentIntent.client_secret,
+      });
+    });
+
+    // Save Payment Info
+    app.post("/payments", async (req, res) => {
+      const payment = req.body;
+
+      // Save to Payments Collection
+      const insertResult = await paymentsCollection.insertOne(payment);
+
+      // Update Booking Status to 'paid'
+      const query = { _id: new ObjectId(payment.bookingId) };
+      const updatedBooking = {
+        $set: {
+          status: "paid",
+          transactionId: payment.transactionId,
+        },
+      };
+      const bookingResult = await bookingsCollection.updateOne(
+        query,
+        updatedBooking
+      );
+
+      // Reduce Ticket Quantity
+      const ticketQuery = { _id: new ObjectId(payment.ticketId) };
+      const updateTicket = {
+        $inc: { quantity: -payment.quantity }, // Decrease quantity
+      };
+      const ticketResult = await ticketsCollection.updateOne(
+        ticketQuery,
+        updateTicket
+      );
+
+      res.send({ insertResult, bookingResult, ticketResult });
     });
 
     // Send a ping to confirm a successful connection
