@@ -99,7 +99,7 @@ async function run() {
       res.send(result);
     });
 
-     // Get ALL Tickets (For Admin)
+    // Get ALL Tickets (For Admin)
     app.get("/tickets/admin", async (req, res) => {
       const result = await ticketsCollection.find().toArray();
       res.send(result);
@@ -111,10 +111,52 @@ async function run() {
       const { status } = req.body;
       const query = { _id: new ObjectId(id) };
       const updateDoc = {
-        $set: { status: status }
+        $set: { status: status },
       };
       const result = await ticketsCollection.updateOne(query, updateDoc);
       res.send(result);
+    });
+
+    // Get Public Tickets (Approved + Search/Sort/Filter/Pagination)
+    app.get("/tickets", async (req, res) => {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 6;
+      const skip = (page - 1) * limit;
+
+      const { from, to, type, sort } = req.query;
+
+      // Base Query: Only show Approved tickets
+      const query = { status: "approved" };
+
+      // Search Logic (Case Insensitive Regex)
+      if (from) query.from = { $regex: from, $options: "i" };
+      if (to) query.to = { $regex: to, $options: "i" };
+
+      // Filter Logic
+      if (type) query.transportType = type;
+
+      // Sort Logic
+      let sortOptions = { departureDate: 1 }; // Default: Sooner dates first
+      if (sort === "asc") sortOptions = { price: 1 }; // Low to High
+      if (sort === "desc") sortOptions = { price: -1 }; // High to Low
+
+      // Execute Query
+      const result = await ticketsCollection
+        .find(query)
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(limit)
+        .toArray();
+
+      // Get Total Count for Pagination
+      const total = await ticketsCollection.countDocuments(query);
+
+      res.send({
+        tickets: result,
+        totalTickets: total,
+        currentPage: page,
+        totalPages: Math.ceil(total / limit),
+      });
     });
 
     // Send a ping to confirm a successful connection
