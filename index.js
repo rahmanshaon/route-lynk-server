@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 // Initialize the Express app
 const app = express();
@@ -80,6 +80,22 @@ async function run() {
       ticket.createdAt = new Date();
 
       const result = await ticketsCollection.insertOne(ticket);
+      res.send(result);
+    });
+
+    // Get Tickets by Vendor Email (GET)
+    app.get("/tickets/vendor/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { "vendor.email": email };
+      const result = await ticketsCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    // Delete Ticket (DELETE)
+    app.delete("/tickets/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await ticketsCollection.deleteOne(query);
       res.send(result);
     });
 
