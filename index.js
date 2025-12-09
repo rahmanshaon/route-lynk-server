@@ -69,6 +69,49 @@ async function run() {
       res.send(result);
     });
 
+    // Get All Users (Admin Only)
+    app.get("/users", async (req, res) => {
+      const result = await usersCollection.find().toArray();
+      res.send(result);
+    });
+
+    // Update User Role (Make Admin/Vendor)
+    app.patch("/users/role/:id", async (req, res) => {
+      const id = req.params.id;
+      const { role } = req.body;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: { role: role },
+      };
+      const result = await usersCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+
+    // Mark Vendor as Fraud (Critical Feature)
+    app.patch("/users/fraud/:id", async (req, res) => {
+      const id = req.params.id;
+      const { email } = req.body;
+      const query = { _id: new ObjectId(id) };
+
+      // Update User Role to 'fraud'
+      const updateDoc = {
+        $set: { role: "fraud", status: "banned" },
+      };
+      const userResult = await usersCollection.updateOne(query, updateDoc);
+
+      // Hide/Reject All Tickets by this Vendor
+      const ticketQuery = { "vendor.email": email };
+      const ticketUpdate = {
+        $set: { status: "rejected" },
+      };
+      const ticketResult = await ticketsCollection.updateMany(
+        ticketQuery,
+        ticketUpdate
+      );
+
+      res.send({ userResult, ticketResult });
+    });
+
     // ==============================================================
     //                     TICKET MANAGEMENT APIs
     // ==============================================================
