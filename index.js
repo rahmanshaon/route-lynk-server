@@ -4,18 +4,16 @@ require("dotenv").config();
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
-// Initialize the Express app
+// --- App Configuration ---
 const app = express();
 const port = process.env.PORT || 5000;
 
-// Middleware
+// --- Middleware ---
 app.use(cors());
 app.use(express.json());
 
-// MongoDB Connection
+// --- Database Configuration ---
 const uri = process.env.MONGODB_URI;
-
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -26,8 +24,9 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
 
+    // --- Collections ---
     const db = client.db("routeLynkDB");
     const usersCollection = db.collection("users");
     const ticketsCollection = db.collection("tickets");
@@ -36,16 +35,16 @@ async function run() {
 
     console.log("Connected to MongoDB successfully!");
 
-    // --- User Related APIs ---
+    // ==============================================================
+    //                     USER MANAGEMENT APIs
+    // ==============================================================
 
-    // Save User to DB
+    // Save or Update User (Upsert)
     app.put("/users/:email", async (req, res) => {
       const email = req.params.email;
       const user = req.body;
       const query = { email: email };
-
       const options = { upsert: true };
-
       const updateDoc = {
         $set: {
           name: user.name,
@@ -54,16 +53,15 @@ async function run() {
           lastLogin: new Date(),
         },
         $setOnInsert: {
-          role: "user",
+          role: "user", // Default role
           timestamp: new Date(),
         },
       };
-
       const result = await usersCollection.updateOne(query, updateDoc, options);
       res.send(result);
     });
 
-    // Get User by Email (to check role)
+    // Get User Details (Role Check)
     app.get("/users/:email", async (req, res) => {
       const email = req.params.email;
       const query = { email: email };
@@ -71,22 +69,35 @@ async function run() {
       res.send(result);
     });
 
-    // --- TICKET Related APIs ---
+    // ==============================================================
+    //                     TICKET MANAGEMENT APIs
+    // ==============================================================
 
-    // Create a Ticket (POST)
-    app.post("/tickets", async (req, res) => {
-      const ticket = req.body;
-
-      // Default status for new tickets
-      ticket.status = "pending";
-      ticket.isAdvertised = false;
-      ticket.createdAt = new Date();
-
-      const result = await ticketsCollection.insertOne(ticket);
+    // Get Advertised Tickets (For Home Page)
+    app.get("/tickets/advertised", async (req, res) => {
+      const query = { status: "approved", isAdvertised: true };
+      const result = await ticketsCollection.find(query).limit(6).toArray();
       res.send(result);
     });
 
-    // Get Tickets by Vendor Email (GET)
+    // Get Latest Tickets (For Home Page)
+    app.get("/tickets/latest", async (req, res) => {
+      const query = { status: "approved" };
+      const result = await ticketsCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .limit(6)
+        .toArray();
+      res.send(result);
+    });
+
+    // Get All Tickets (For Admin Management)
+    app.get("/tickets/admin", async (req, res) => {
+      const result = await ticketsCollection.find().toArray();
+      res.send(result);
+    });
+
+    // Get Tickets by Vendor Email
     app.get("/tickets/vendor/:email", async (req, res) => {
       const email = req.params.email;
       const query = { "vendor.email": email };
@@ -94,44 +105,16 @@ async function run() {
       res.send(result);
     });
 
-    // Delete Ticket (DELETE)
-    app.delete("/tickets/:id", async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await ticketsCollection.deleteOne(query);
-      res.send(result);
-    });
-
-    // Get ALL Tickets (For Admin)
-    app.get("/tickets/admin", async (req, res) => {
-      const result = await ticketsCollection.find().toArray();
-      res.send(result);
-    });
-
-    // Update Ticket Status (Approve/Reject)
-    app.patch("/tickets/status/:id", async (req, res) => {
-      const id = req.params.id;
-      const { status } = req.body;
-      const query = { _id: new ObjectId(id) };
-      const updateDoc = {
-        $set: { status: status },
-      };
-      const result = await ticketsCollection.updateOne(query, updateDoc);
-      res.send(result);
-    });
-
-    // Get Public Tickets (Approved + Search/Sort/Filter/Pagination)
+    // Public Search & Filter API (All Tickets Page)
     app.get("/tickets", async (req, res) => {
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 6;
       const skip = (page - 1) * limit;
 
       const { from, to, type, sort } = req.query;
-
-      // Base Query: Only show Approved tickets
       const query = { status: "approved" };
 
-      // Search Logic (Case Insensitive Regex)
+      // Search Logic
       if (from) query.from = { $regex: from, $options: "i" };
       if (to) query.to = { $regex: to, $options: "i" };
 
@@ -139,19 +122,16 @@ async function run() {
       if (type) query.transportType = type;
 
       // Sort Logic
-      let sortOptions = { departureDate: 1 }; // Default: Sooner dates first
-      if (sort === "asc") sortOptions = { price: 1 }; // Low to High
-      if (sort === "desc") sortOptions = { price: -1 }; // High to Low
+      let sortOptions = { departureDate: 1 };
+      if (sort === "asc") sortOptions = { price: 1 };
+      if (sort === "desc") sortOptions = { price: -1 };
 
-      // Execute Query
       const result = await ticketsCollection
         .find(query)
         .sort(sortOptions)
         .skip(skip)
         .limit(limit)
         .toArray();
-
-      // Get Total Count for Pagination
       const total = await ticketsCollection.countDocuments(query);
 
       res.send({
@@ -162,28 +142,78 @@ async function run() {
       });
     });
 
-    // 7. Get Single Ticket by ID
+    // Get Single Ticket Details
     app.get("/tickets/:id", async (req, res) => {
       const id = req.params.id;
+      // Prevent crash if ID is not valid
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ message: "Invalid Ticket ID" });
+      }
       const query = { _id: new ObjectId(id) };
       const result = await ticketsCollection.findOne(query);
       res.send(result);
     });
 
-    // --- BOOKING APIs ---
+    // Create New Ticket (Vendor)
+    app.post("/tickets", async (req, res) => {
+      const ticket = req.body;
+      ticket.status = "pending";
+      ticket.isAdvertised = false;
+      ticket.createdAt = new Date();
+      const result = await ticketsCollection.insertOne(ticket);
+      res.send(result);
+    });
 
-    // Create a Booking (POST)
+    // Delete Ticket
+    app.delete("/tickets/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await ticketsCollection.deleteOne(query);
+      res.send(result);
+    });
+
+    // Update Ticket Status (Admin Approve/Reject)
+    app.patch("/tickets/status/:id", async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = { $set: { status: status } };
+      const result = await ticketsCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+
+    // Toggle Advertisement Status (Admin)
+    app.patch("/tickets/advertise/:id", async (req, res) => {
+      const id = req.params.id;
+      const { isAdvertised } = req.body;
+      const query = { _id: new ObjectId(id) };
+
+      if (isAdvertised) {
+        const count = await ticketsCollection.countDocuments({
+          isAdvertised: true,
+        });
+        if (count >= 6) return res.send({ limitReached: true });
+      }
+
+      const updateDoc = { $set: { isAdvertised: isAdvertised } };
+      const result = await ticketsCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
+
+    // ==============================================================
+    //                     BOOKING MANAGEMENT APIs
+    // ==============================================================
+
+    // Create Booking
     app.post("/bookings", async (req, res) => {
       const booking = req.body;
-
       booking.status = "pending";
       booking.bookedAt = new Date();
-
       const result = await bookingsCollection.insertOne(booking);
       res.send(result);
     });
 
-    // Get Bookings by User Email (For My Bookings)
+    // Get User's Bookings
     app.get("/bookings/user/:email", async (req, res) => {
       const email = req.params.email;
       const query = { userEmail: email };
@@ -191,7 +221,7 @@ async function run() {
       res.send(result);
     });
 
-    // Get Bookings by Vendor Email (For Vendor Requests)
+    // Get Vendor's Booking Requests
     app.get("/bookings/vendor/:email", async (req, res) => {
       const email = req.params.email;
       const query = { vendorEmail: email };
@@ -199,21 +229,21 @@ async function run() {
       res.send(result);
     });
 
-    // Update Booking Status (Accept/Reject)
+    // Update Booking Status (Vendor Accept/Reject)
     app.patch("/bookings/status/:id", async (req, res) => {
       const id = req.params.id;
       const { status } = req.body;
       const query = { _id: new ObjectId(id) };
-      const updateDoc = {
-        $set: { status: status },
-      };
+      const updateDoc = { $set: { status: status } };
       const result = await bookingsCollection.updateOne(query, updateDoc);
       res.send(result);
     });
 
-    // --- PAYMENT APIs ---
+    // ==============================================================
+    //                     PAYMENT SYSTEM APIs
+    // ==============================================================
 
-    // Create Payment Intent
+    // Create Payment (Stripe)
     app.post("/create-payment-intent", async (req, res) => {
       const { price } = req.body;
       const amount = parseInt(price * 100);
@@ -224,36 +254,29 @@ async function run() {
         payment_method_types: ["card"],
       });
 
-      res.send({
-        clientSecret: paymentIntent.client_secret,
-      });
+      res.send({ clientSecret: paymentIntent.client_secret });
     });
 
-    // Save Payment Info
+    // Process Successful Payment (Transaction)
     app.post("/payments", async (req, res) => {
       const payment = req.body;
 
-      // Save to Payments Collection
+      // Save Payment Record
       const insertResult = await paymentsCollection.insertOne(payment);
 
-      // Update Booking Status to 'paid'
-      const query = { _id: new ObjectId(payment.bookingId) };
+      // Update Booking Status -> 'paid'
+      const bookingQuery = { _id: new ObjectId(payment.bookingId) };
       const updatedBooking = {
-        $set: {
-          status: "paid",
-          transactionId: payment.transactionId,
-        },
+        $set: { status: "paid", transactionId: payment.transactionId },
       };
       const bookingResult = await bookingsCollection.updateOne(
-        query,
+        bookingQuery,
         updatedBooking
       );
 
       // Reduce Ticket Quantity
       const ticketQuery = { _id: new ObjectId(payment.ticketId) };
-      const updateTicket = {
-        $inc: { quantity: -payment.quantity }, // Decrease quantity
-      };
+      const updateTicket = { $inc: { quantity: -payment.quantity } };
       const ticketResult = await ticketsCollection.updateOne(
         ticketQuery,
         updateTicket
@@ -262,7 +285,7 @@ async function run() {
       res.send({ insertResult, bookingResult, ticketResult });
     });
 
-    // Get Payments by User (Transaction History)
+    // Get User Payment History
     app.get("/payments/user/:email", async (req, res) => {
       const email = req.params.email;
       const query = { userEmail: email };
@@ -273,23 +296,21 @@ async function run() {
       res.send(result);
     });
 
-    // Vendor Stats (Revenue Overview)
+    // Get Vendor Revenue Stats
     app.get("/vendor-stats/:email", async (req, res) => {
       const email = req.params.email;
 
-      // Total Revenue
+      // Stats Aggregation
       const payments = await paymentsCollection
         .find({ vendorEmail: email })
         .toArray();
       const totalRevenue = payments.reduce((sum, item) => sum + item.price, 0);
       const totalSold = payments.reduce((sum, item) => sum + item.quantity, 0);
 
-      // Total Tickets Added
       const totalAdded = await ticketsCollection.countDocuments({
         "vendor.email": email,
       });
 
-      // Pending Requests
       const pendingRequests = await bookingsCollection.countDocuments({
         vendorEmail: email,
         status: "pending",
@@ -298,23 +319,19 @@ async function run() {
       res.send({ totalRevenue, totalSold, totalAdded, pendingRequests });
     });
 
-    // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
     // await client.close();
   }
 }
 run().catch(console.dir);
 
-// Basic Route
+// Root Route
 app.get("/", (req, res) => {
   res.send("RouteLynk Server is Running...");
 });
 
-// Start Server
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
