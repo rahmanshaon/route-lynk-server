@@ -5,7 +5,6 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const jwt = require("jsonwebtoken");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
-
 // --- App Configuration ---
 const app = express();
 const port = process.env.PORT || 5000;
@@ -45,6 +44,8 @@ async function run() {
     // Generate Token on Login
     app.post("/jwt", async (req, res) => {
       const user = req.body;
+
+      // Generate token valid for 1 hour
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
         expiresIn: "1h",
       });
@@ -219,6 +220,32 @@ async function run() {
       ticket.isAdvertised = false;
       ticket.createdAt = new Date();
       const result = await ticketsCollection.insertOne(ticket);
+      res.send(result);
+    });
+
+    // Update Ticket (Vendor) - <--- PROTECTED
+    app.patch("/tickets/update/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const updatedData = req.body;
+      const query = { _id: new ObjectId(id) };
+      
+      const updateDoc = {
+        $set: {
+          title: updatedData.title,
+          from: updatedData.from,
+          to: updatedData.to,
+          transportType: updatedData.transportType,
+          price: updatedData.price,
+          quantity: updatedData.quantity,
+          departureDate: updatedData.departureDate,
+          departureTime: updatedData.departureTime,
+          description: updatedData.description,
+          perks: updatedData.perks,
+          image: updatedData.image,
+        }
+      };
+
+      const result = await ticketsCollection.updateOne(query, updateDoc);
       res.send(result);
     });
 
