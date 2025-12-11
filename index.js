@@ -10,7 +10,12 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // --- Middleware ---
-app.use(cors());
+const corsOptions = {
+  origin: ["http://localhost:5173", process.env.CLIENT_URL],
+  credentials: true,
+  optionSuccessStatus: 200,
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Import Middlewares
