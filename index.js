@@ -12,7 +12,11 @@ const port = process.env.PORT || 5000;
 // --- Middleware ---
 app.use(cors());
 app.use(express.json());
+
+// Import Middlewares
 const verifyToken = require("./middleware/verifyToken");
+const verifyAdminFactory = require("./middleware/verifyAdmin");
+const verifyVendorFactory = require("./middleware/verifyVendor");
 
 // --- Database Configuration ---
 const uri = process.env.MONGODB_URI;
@@ -37,6 +41,10 @@ async function run() {
 
     console.log("Connected to MongoDB successfully!");
 
+    // --- Initialize Role Middlewares with DB Collection ---
+    const verifyAdmin = verifyAdminFactory(usersCollection);
+    const verifyVendor = verifyVendorFactory(usersCollection);
+
     // ==============================================================
     //                     JWT AUTHENTICATION API
     // ==============================================================
@@ -45,9 +53,9 @@ async function run() {
     app.post("/jwt", async (req, res) => {
       const user = req.body;
 
-      // Generate token valid for 1 hour
+      // Generate token valid for 1 day
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
-        expiresIn: "1h",
+        expiresIn: "1d",
       });
       res.send({ token });
     });
@@ -56,7 +64,7 @@ async function run() {
     //                     USER MANAGEMENT APIs
     // ==============================================================
 
-    // Save or Update User (Upsert) - Public (accessible during Register/Login)
+    // Save/Update User (Public/Auth)
     app.put("/users/:email", async (req, res) => {
       const email = req.params.email;
       const user = req.body;
@@ -78,22 +86,22 @@ async function run() {
       res.send(result);
     });
 
-    // Get User Details (Role Check)
-    app.get("/users/:email", async (req, res) => {
+    // Get User Details
+    app.get("/users/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       const query = { email: email };
       const result = await usersCollection.findOne(query);
       res.send(result);
     });
 
-    // Get All Users (Admin Only) - <--- PROTECTED
-    app.get("/users", verifyToken, async (req, res) => {
+    // ADMIN ONLY: Get All Users
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
       const result = await usersCollection.find().toArray();
       res.send(result);
     });
 
-    // Update User Role (Make Admin/Vendor) - <--- PROTECTED
-    app.patch("/users/role/:id", verifyToken, async (req, res) => {
+    // ADMIN ONLY: Update User Role
+    app.patch("/users/role/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const { role } = req.body;
       const query = { _id: new ObjectId(id) };
@@ -104,43 +112,48 @@ async function run() {
       res.send(result);
     });
 
-    // Mark Vendor as Fraud - <--- PROTECTED
-    app.patch("/users/fraud/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const { email } = req.body;
-      const query = { _id: new ObjectId(id) };
+    // ADMIN ONLY: Mark Vendor as Fraud
+    app.patch(
+      "/users/fraud/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const { email } = req.body;
+        const query = { _id: new ObjectId(id) };
 
-      // Update User Role to 'fraud'
-      const updateDoc = {
-        $set: { role: "fraud", status: "banned" },
-      };
-      const userResult = await usersCollection.updateOne(query, updateDoc);
+        // Ban User
+        const updateDoc = {
+          $set: { role: "fraud", status: "banned" },
+        };
+        const userResult = await usersCollection.updateOne(query, updateDoc);
 
-      // Hide/Reject All Tickets by this Vendor
-      const ticketQuery = { "vendor.email": email };
-      const ticketUpdate = {
-        $set: { status: "rejected" },
-      };
-      const ticketResult = await ticketsCollection.updateMany(
-        ticketQuery,
-        ticketUpdate
-      );
+        // Reject all their tickets
+        const ticketQuery = { "vendor.email": email };
+        const ticketUpdate = {
+          $set: { status: "rejected" },
+        };
+        const ticketResult = await ticketsCollection.updateMany(
+          ticketQuery,
+          ticketUpdate
+        );
 
-      res.send({ userResult, ticketResult });
-    });
+        res.send({ userResult, ticketResult });
+      }
+    );
 
     // ==============================================================
     //                     TICKET MANAGEMENT APIs
     // ==============================================================
 
-    // Get Advertised Tickets (Public)
+    // Public: Advertised Tickets
     app.get("/tickets/advertised", async (req, res) => {
       const query = { status: "approved", isAdvertised: true };
       const result = await ticketsCollection.find(query).limit(6).toArray();
       res.send(result);
     });
 
-    // Get Latest Tickets (Public)
+    // Public: Latest Tickets
     app.get("/tickets/latest", async (req, res) => {
       const query = { status: "approved" };
       const result = await ticketsCollection
@@ -151,21 +164,26 @@ async function run() {
       res.send(result);
     });
 
-    // Get All Tickets (Admin) - <--- PROTECTED
-    app.get("/tickets/admin", verifyToken, async (req, res) => {
+    // ADMIN ONLY: Get All Tickets for Management
+    app.get("/tickets/admin", verifyToken, verifyAdmin, async (req, res) => {
       const result = await ticketsCollection.find().toArray();
       res.send(result);
     });
 
-    // Get Tickets by Vendor Email - <--- PROTECTED
-    app.get("/tickets/vendor/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
-      const query = { "vendor.email": email };
-      const result = await ticketsCollection.find(query).toArray();
-      res.send(result);
-    });
+    // VENDOR ONLY: Get My Tickets
+    app.get(
+      "/tickets/vendor/:email",
+      verifyToken,
+      verifyVendor,
+      async (req, res) => {
+        const email = req.params.email;
+        const query = { "vendor.email": email };
+        const result = await ticketsCollection.find(query).toArray();
+        res.send(result);
+      }
+    );
 
-    // Public Search & Filter API (All Tickets Page)
+    // Public: Search & Filter (All Tickets Page)
     app.get("/tickets", async (req, res) => {
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 6;
@@ -202,8 +220,8 @@ async function run() {
       });
     });
 
-    // Get Single Ticket Details
-    app.get("/tickets/:id", async (req, res) => {
+    // Public: Single Ticket Details
+    app.get("/tickets/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       if (!ObjectId.isValid(id)) {
         return res.status(400).send({ message: "Invalid Ticket ID" });
@@ -213,8 +231,8 @@ async function run() {
       res.send(result);
     });
 
-    // Create New Ticket (Vendor) - <--- PROTECTED
-    app.post("/tickets", verifyToken, async (req, res) => {
+    // VENDOR ONLY: Add Ticket
+    app.post("/tickets", verifyToken, verifyVendor, async (req, res) => {
       const ticket = req.body;
       ticket.status = "pending";
       ticket.isAdvertised = false;
@@ -223,112 +241,181 @@ async function run() {
       res.send(result);
     });
 
-    // Update Ticket (Vendor) - <--- PROTECTED
-    app.patch("/tickets/update/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const updatedData = req.body;
-      const query = { _id: new ObjectId(id) };
-      
-      const updateDoc = {
-        $set: {
-          title: updatedData.title,
-          from: updatedData.from,
-          to: updatedData.to,
-          transportType: updatedData.transportType,
-          price: updatedData.price,
-          quantity: updatedData.quantity,
-          departureDate: updatedData.departureDate,
-          departureTime: updatedData.departureTime,
-          description: updatedData.description,
-          perks: updatedData.perks,
-          image: updatedData.image,
+    // VENDOR ONLY: Update Ticket
+    app.patch(
+      "/tickets/update/:id",
+      verifyToken,
+      verifyVendor,
+      async (req, res) => {
+        const id = req.params.id;
+        const updatedData = req.body;
+        const query = { _id: new ObjectId(id) };
+
+        // Fetch the existing ticket first
+        const existingTicket = await ticketsCollection.findOne(query);
+
+        if (!existingTicket) {
+          return res.status(404).send({ message: "Ticket not found" });
         }
-      };
 
-      const result = await ticketsCollection.updateOne(query, updateDoc);
-      res.send(result);
-    });
+        // SECURITY CHECK: Check if status is rejected
+        if (existingTicket.status === "rejected") {
+          return res
+            .status(403)
+            .send({ message: "You cannot edit a rejected ticket." });
+        }
 
-    // Delete Ticket - <--- PROTECTED
-    app.delete("/tickets/:id", verifyToken, async (req, res) => {
+        const updateDoc = {
+          $set: {
+            title: updatedData.title,
+            from: updatedData.from,
+            to: updatedData.to,
+            transportType: updatedData.transportType,
+            price: updatedData.price,
+            quantity: updatedData.quantity,
+            departureDate: updatedData.departureDate,
+            departureTime: updatedData.departureTime,
+            description: updatedData.description,
+            perks: updatedData.perks,
+            image: updatedData.image,
+          },
+        };
+
+        const result = await ticketsCollection.updateOne(query, updateDoc);
+        res.send(result);
+      }
+    );
+
+    // VENDOR ONLY: Delete Ticket
+    app.delete("/tickets/:id", verifyToken, verifyVendor, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await ticketsCollection.deleteOne(query);
       res.send(result);
     });
 
-    // Update Ticket Status (Admin) - <--- PROTECTED
-    app.patch("/tickets/status/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const { status } = req.body;
-      const query = { _id: new ObjectId(id) };
-      const updateDoc = { $set: { status: status } };
-      const result = await ticketsCollection.updateOne(query, updateDoc);
-      res.send(result);
-    });
-
-    // Toggle Advertisement Status (Admin) - <--- PROTECTED
-    app.patch("/tickets/advertise/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const { isAdvertised } = req.body;
-      const query = { _id: new ObjectId(id) };
-
-      if (isAdvertised) {
-        const count = await ticketsCollection.countDocuments({
-          isAdvertised: true,
-        });
-        if (count >= 6) return res.send({ limitReached: true });
+    // ADMIN ONLY: Approve/Reject Ticket
+    app.patch(
+      "/tickets/status/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const { status } = req.body;
+        const query = { _id: new ObjectId(id) };
+        const updateDoc = { $set: { status: status } };
+        const result = await ticketsCollection.updateOne(query, updateDoc);
+        res.send(result);
       }
+    );
 
-      const updateDoc = { $set: { isAdvertised: isAdvertised } };
-      const result = await ticketsCollection.updateOne(query, updateDoc);
-      res.send(result);
-    });
+    // ADMIN ONLY: Toggle Advertisement
+    app.patch(
+      "/tickets/advertise/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const { isAdvertised } = req.body;
+        const query = { _id: new ObjectId(id) };
+
+        if (isAdvertised) {
+          const count = await ticketsCollection.countDocuments({
+            isAdvertised: true,
+          });
+          if (count >= 6) return res.send({ limitReached: true });
+        }
+
+        const updateDoc = { $set: { isAdvertised: isAdvertised } };
+        const result = await ticketsCollection.updateOne(query, updateDoc);
+        res.send(result);
+      }
+    );
 
     // ==============================================================
     //                     BOOKING MANAGEMENT APIs
     // ==============================================================
 
-    // Create Booking - <--- PROTECTED
+    // Create Booking (Any User) - Includes Stock Check
     app.post("/bookings", verifyToken, async (req, res) => {
       const booking = req.body;
+
+      const ticket = await ticketsCollection.findOne({
+        _id: new ObjectId(booking.ticketId),
+      });
+
+      if (!ticket) {
+        return res.status(404).send({ message: "Ticket not found" });
+      }
+
+      // Stock Check
+      if (ticket.quantity < booking.quantity) {
+        return res
+          .status(400)
+          .send({ message: "Not enough tickets available" });
+      }
+
+      // SECURITY CHECK: Date Validation
+      const departureDate = new Date(ticket.departureDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      if (departureDate < today) {
+        return res
+          .status(400)
+          .send({ message: "This ticket has already expired." });
+      }
+
       booking.status = "pending";
       booking.bookedAt = new Date();
       const result = await bookingsCollection.insertOne(booking);
       res.send(result);
     });
 
-    // Get User's Bookings - <--- PROTECTED
+    // Get User's Bookings
     app.get("/bookings/user/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
+      if (req.decoded.email !== email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
       const query = { userEmail: email };
       const result = await bookingsCollection.find(query).toArray();
       res.send(result);
     });
 
-    // Get Vendor's Booking Requests - <--- PROTECTED
-    app.get("/bookings/vendor/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
-      const query = { vendorEmail: email };
-      const result = await bookingsCollection.find(query).toArray();
-      res.send(result);
-    });
+    // VENDOR ONLY: Get Requests
+    app.get(
+      "/bookings/vendor/:email",
+      verifyToken,
+      verifyVendor,
+      async (req, res) => {
+        const email = req.params.email;
+        const query = { vendorEmail: email };
+        const result = await bookingsCollection.find(query).toArray();
+        res.send(result);
+      }
+    );
 
-    // Update Booking Status (Vendor Accept/Reject) - <--- PROTECTED
-    app.patch("/bookings/status/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const { status } = req.body;
-      const query = { _id: new ObjectId(id) };
-      const updateDoc = { $set: { status: status } };
-      const result = await bookingsCollection.updateOne(query, updateDoc);
-      res.send(result);
-    });
+    // VENDOR ONLY: Accept/Reject Booking
+    app.patch(
+      "/bookings/status/:id",
+      verifyToken,
+      verifyVendor,
+      async (req, res) => {
+        const id = req.params.id;
+        const { status } = req.body;
+        const query = { _id: new ObjectId(id) };
+        const updateDoc = { $set: { status: status } };
+        const result = await bookingsCollection.updateOne(query, updateDoc);
+        res.send(result);
+      }
+    );
 
     // ==============================================================
     //                     PAYMENT SYSTEM APIs
     // ==============================================================
 
-    // Create Payment (Stripe) - <--- PROTECTED
+    // Create Payment Intent
     app.post("/create-payment-intent", verifyToken, async (req, res) => {
       const { price } = req.body;
       const amount = parseInt(price * 100);
@@ -342,11 +429,11 @@ async function run() {
       res.send({ clientSecret: paymentIntent.client_secret });
     });
 
-    // Process Successful Payment (Transaction) - <--- PROTECTED
+    // Process Payment
     app.post("/payments", verifyToken, async (req, res) => {
       const payment = req.body;
 
-      // Save Payment Record
+      // Save Payment
       const insertResult = await paymentsCollection.insertOne(payment);
 
       // Update Booking Status -> 'paid'
@@ -367,9 +454,12 @@ async function run() {
       res.send({ insertResult, ticketResult });
     });
 
-    // Get User Payment History - <--- PROTECTED
+    // Get User Payment History
     app.get("/payments/user/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
+      if (req.decoded.email !== email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
       const query = { userEmail: email };
       const result = await paymentsCollection
         .find(query)
@@ -378,28 +468,38 @@ async function run() {
       res.send(result);
     });
 
-    // Get Vendor Revenue Stats - <--- PROTECTED
-    app.get("/vendor-stats/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
+    // VENDOR ONLY: Revenue Stats
+    app.get(
+      "/vendor-stats/:email",
+      verifyToken,
+      verifyVendor,
+      async (req, res) => {
+        const email = req.params.email;
 
-      // Stats Aggregation
-      const payments = await paymentsCollection
-        .find({ vendorEmail: email })
-        .toArray();
-      const totalRevenue = payments.reduce((sum, item) => sum + item.price, 0);
-      const totalSold = payments.reduce((sum, item) => sum + item.quantity, 0);
+        const payments = await paymentsCollection
+          .find({ vendorEmail: email })
+          .toArray();
+        const totalRevenue = payments.reduce(
+          (sum, item) => sum + item.price,
+          0
+        );
+        const totalSold = payments.reduce(
+          (sum, item) => sum + item.quantity,
+          0
+        );
 
-      const totalAdded = await ticketsCollection.countDocuments({
-        "vendor.email": email,
-      });
+        const totalAdded = await ticketsCollection.countDocuments({
+          "vendor.email": email,
+        });
 
-      const pendingRequests = await bookingsCollection.countDocuments({
-        vendorEmail: email,
-        status: "pending",
-      });
+        const pendingRequests = await bookingsCollection.countDocuments({
+          vendorEmail: email,
+          status: "pending",
+        });
 
-      res.send({ totalRevenue, totalSold, totalAdded, pendingRequests });
-    });
+        res.send({ totalRevenue, totalSold, totalAdded, pendingRequests });
+      }
+    );
 
     // await client.db("admin").command({ ping: 1 });
     // console.log("Pinged your deployment. You successfully connected to MongoDB!");
